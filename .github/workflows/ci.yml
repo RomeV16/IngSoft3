@@ -329,16 +329,18 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Redeploy Backend on Railway DEV
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_DEV_TOKEN }}
         run: |
-          railway redeploy --service "${RAILWAY_DEV_BACKEND_SERVICE_ID}" --yes
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_DEV_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_DEV_ENV}\\\", serviceId: \\\"${RAILWAY_DEV_BACKEND_SERVICE_ID}\\\") }\"}"
 
       - name: Redeploy Frontend on Railway DEV
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_DEV_TOKEN }}
         run: |
-          railway redeploy --service "${RAILWAY_DEV_FRONTEND_SERVICE_ID}" --yes
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_DEV_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_DEV_ENV}\\\", serviceId: \\\"${RAILWAY_DEV_FRONTEND_SERVICE_ID}\\\") }\"}"
 
   promote_prod:
     runs-on: ubuntu-latest
@@ -379,13 +381,16 @@ jobs:
           docker tag "$BACK_IMAGE:${IMAGE_SHA_TAG}" "$BACK_IMAGE:prod"
           docker push "$BACK_IMAGE:prod"
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
       - name: Redeploy Backend on Railway PROD
         run: |
-          railway redeploy --service "${RAILWAY_PROD_BACKEND_SERVICE_ID}" --yes
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_PROD_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_PROD_ENV}\\\", serviceId: \\\"${RAILWAY_PROD_BACKEND_SERVICE_ID}\\\") }\"}"
 
       - name: Redeploy Frontend on Railway PROD
         run: |
-          railway redeploy --service "${RAILWAY_PROD_FRONTEND_SERVICE_ID}" --yes
+          curl -s -X POST https://backboard.railway.com/graphql/v2 \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_PROD_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_PROD_ENV}\\\", serviceId: \\\"${RAILWAY_PROD_FRONTEND_SERVICE_ID}\\\") }\"}"
