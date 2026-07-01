@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - dev
-      - prod
   pull_request:
     branches:
       - main
@@ -18,7 +17,6 @@ permissions:
 env:
   NODE_VERSION: "20.x"
   GO_VERSION: "1.22.x"
-  FRONTEND_URL: "http://localhost:3000"
   RAILWAY_DEV_PROJECT_ID: ${{ vars.RAILWAY_DEV_PROJECT_ID }}
   RAILWAY_PROD_PROJECT_ID: ${{ vars.RAILWAY_PROD_PROJECT_ID }}
   RAILWAY_DEV_ENV: ${{ vars.RAILWAY_DEV_ENV }}
@@ -27,8 +25,10 @@ env:
   RAILWAY_DEV_FRONTEND_SERVICE_ID: ${{ vars.RAILWAY_DEV_FRONTEND_SERVICE_ID }}
   RAILWAY_PROD_BACKEND_SERVICE_ID: ${{ vars.RAILWAY_PROD_BACKEND_SERVICE_ID }}
   RAILWAY_PROD_FRONTEND_SERVICE_ID: ${{ vars.RAILWAY_PROD_FRONTEND_SERVICE_ID }}
+  FRONTEND_DEV_URL: "https://frontend-dev-production-9326.up.railway.app"
 
 jobs:
+  # ── 1. Tests unitarios del frontend ──────────────────────────────────────────
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -48,7 +48,7 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Tests del frontend
+      - name: Tests unitarios del frontend
         run: npm run test:ci
 
       - name: Build del frontend
@@ -68,7 +68,6 @@ jobs:
           if [ -d scripts ]; then cp -R scripts "$ARTIFACT_DIR"/; fi
           cp -R .next "$ARTIFACT_DIR"/
           npm ci --omit=dev --prefix "$ARTIFACT_DIR"
-          # -y preserves symlinks (e.g. node_modules/.bin/next) so runtime start works after unzip.
           (cd "$ARTIFACT_DIR" && zip -yr ../frontend-dist.zip .)
 
       - name: Publicar artefacto frontend
@@ -85,6 +84,7 @@ jobs:
           path: front/coverage/lcov.info
           if-no-files-found: warn
 
+  # ── 2. Tests unitarios del backend ───────────────────────────────────────────
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -99,7 +99,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Tests y gate de cobertura backend
+      - name: Tests unitarios y gate de cobertura backend
         run: |
           make cover
           make check-cover
@@ -133,6 +133,7 @@ jobs:
           path: back/backend-dist.zip
           if-no-files-found: error
 
+  # ── 3. Análisis estático de código con SonarCloud ────────────────────────────
   sonar:
     runs-on: ubuntu-latest
     needs:
@@ -142,119 +143,29 @@ jobs:
       - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Análisis con SonarCloud
+      - name: Descargar cobertura frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-coverage-lcov
+          path: front/coverage
+
+      - name: Descargar cobertura backend
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-coverage-cobertura
+          path: back
+
+      - name: Análisis estático con SonarCloud
         uses: SonarSource/sonarcloud-github-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
 
-  e2e:
-    runs-on: ubuntu-latest
-    needs:
-      - frontend
-      - backend
-    steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
-
-      - name: Configurar Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: e2e/package-lock.json
-
-      - name: Descargar artefacto backend
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-dist
-          path: artifacts/backend
-
-      - name: Descomprimir artefacto backend
-        run: |
-          set -euo pipefail
-          rm -rf release/backend
-          mkdir -p release/backend
-          unzip -o artifacts/backend/backend-dist.zip -d release/backend
-          chmod +x release/backend/server || true
-          chmod +x release/backend/server || true
-
-      - name: Descargar artefacto frontend
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: artifacts/frontend
-
-      - name: Descomprimir artefacto frontend
-        run: |
-          set -euo pipefail
-          rm -rf release/frontend
-          mkdir -p release/frontend
-          unzip -o artifacts/frontend/frontend-dist.zip -d release/frontend
-
-      - name: Iniciar backend (localhost:8080)
-        working-directory: release/backend
-        run: |
-          nohup bash -c 'DB_DSN=./employees.db ./server > ../../back_server.log 2>&1' &
-          echo $! > ../../backend.pid
-          sleep 2
-
-      - name: Iniciar frontend (localhost:3000)
-        working-directory: release/frontend
-        run: |
-          nohup bash -c 'NEXT_PUBLIC_API_URL=http://localhost:8080 npm run start > ../../front_server.log 2>&1' &
-          echo $! > ../../frontend.pid
-          sleep 3
-
-      - name: Instalar dependencias E2E
-        working-directory: e2e
-        run: npm ci
-
-      - name: Ejecutar tests E2E con Cypress
-        working-directory: e2e
-        env:
-          FRONTEND_URL: ${{ env.FRONTEND_URL }}
-        run: npx cypress run --headless
-
-      - name: Publicar resultados E2E
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cypress-results
-          path: e2e/cypress/results/**/*.xml
-          if-no-files-found: warn
-
-      - name: Publicar videos de Cypress
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cypress-videos
-          path: e2e/cypress/videos
-          if-no-files-found: warn
-
-      - name: Publicar screenshots de Cypress
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cypress-screenshots
-          path: e2e/cypress/screenshots
-          if-no-files-found: warn
-
-      - name: Detener servicios
-        if: always()
-        run: |
-          if [ -f backend.pid ]; then kill "$(cat backend.pid)" || true; fi
-          if [ -f frontend.pid ]; then kill "$(cat frontend.pid)" || true; fi
-
+  # ── 4. Publicar imágenes Docker en GHCR (solo en main) ───────────────────────
   publish_images:
     runs-on: ubuntu-latest
     needs:
-      - e2e
+      - sonar
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
       IMAGE_SHA_TAG: sha-${{ github.sha }}
@@ -297,6 +208,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Aquí se construyen y publican las imágenes Docker en el registro GHCR
       - name: Build y push imagen frontend
         run: |
           set -euo pipefail
@@ -313,6 +225,7 @@ jobs:
           docker push "$BACK_IMAGE:${IMAGE_SHA_TAG}"
           docker push "$BACK_IMAGE:dev"
 
+  # ── 5. Desplegar en entorno DEV (automático) ──────────────────────────────────
   deploy_dev:
     runs-on: ubuntu-latest
     needs:
@@ -324,9 +237,6 @@ jobs:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_DEV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Instalar Railway CLI
-        run: npm install -g @railway/cli
 
       - name: Redesplegar backend en DEV
         run: |
@@ -342,10 +252,65 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_DEV_ENV}\\\", serviceId: \\\"${RAILWAY_DEV_FRONTEND_SERVICE_ID}\\\") }\"}"
 
-  promote_prod:
+      - name: Esperar que DEV esté listo
+        run: sleep 30
+
+  # ── 6. Tests E2E contra el entorno DEV desplegado ────────────────────────────
+  e2e:
     runs-on: ubuntu-latest
     needs:
       - deploy_dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Instalar dependencias E2E
+        working-directory: e2e
+        run: npm ci
+
+      - name: Ejecutar tests E2E con Cypress contra DEV
+        working-directory: e2e
+        env:
+          FRONTEND_URL: ${{ env.FRONTEND_DEV_URL }}
+        run: npx cypress run --headless
+
+      - name: Publicar resultados E2E
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-results
+          path: e2e/cypress/results/**/*.xml
+          if-no-files-found: warn
+
+      - name: Publicar videos de Cypress
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-videos
+          path: e2e/cypress/videos
+          if-no-files-found: warn
+
+      - name: Publicar screenshots de Cypress
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-screenshots
+          path: e2e/cypress/screenshots
+          if-no-files-found: warn
+
+  # ── 7. Promover a PROD (requiere aprobación manual) ───────────────────────────
+  promote_prod:
+    runs-on: ubuntu-latest
+    needs:
+      - e2e
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: prod
