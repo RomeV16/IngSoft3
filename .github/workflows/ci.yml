@@ -280,7 +280,7 @@ jobs:
         working-directory: e2e
         env:
           FRONTEND_URL: ${{ env.FRONTEND_DEV_URL }}
-        run: npx cypress run --headless
+        run: npx cypress run --headless --env API_URL=https://backend-dev-production-ba11.up.railway.app
 
       - name: Publicar resultados E2E
         if: always()
