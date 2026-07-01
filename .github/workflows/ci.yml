@@ -1,4 +1,4 @@
-name: CI
+name: Integración y Despliegue Continuo
 
 on:
   push:
@@ -35,26 +35,26 @@ jobs:
       run:
         working-directory: front
     steps:
-      - name: Checkout
+      - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Use Node.js
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: front/package-lock.json
 
-      - name: Install dependencies
+      - name: Instalar dependencias
         run: npm ci
 
-      - name: Frontend tests
+      - name: Tests del frontend
         run: npm run test:ci
 
-      - name: Build Frontend (production)
+      - name: Build del frontend
         run: npm run build
 
-      - name: Package Frontend Artifact (zip)
+      - name: Empaquetar frontend
         run: |
           set -euo pipefail
           ARTIFACT_DIR=dist-artifact
@@ -71,14 +71,14 @@ jobs:
           # -y preserves symlinks (e.g. node_modules/.bin/next) so runtime start works after unzip.
           (cd "$ARTIFACT_DIR" && zip -yr ../frontend-dist.zip .)
 
-      - name: Publish Frontend Release Artifact
+      - name: Publicar artefacto frontend
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: front/frontend-dist.zip
           if-no-files-found: error
 
-      - name: Publish Frontend Coverage (lcov)
+      - name: Publicar cobertura frontend
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage-lcov
@@ -91,32 +91,32 @@ jobs:
       run:
         working-directory: back
     steps:
-      - name: Checkout
+      - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Use Go
+      - name: Configurar Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Backend tests and coverage gate
+      - name: Tests y gate de cobertura backend
         run: |
           make cover
           make check-cover
 
-      - name: Convert Go coverage to Cobertura
+      - name: Convertir cobertura a Cobertura
         run: |
           go install github.com/t-yuki/gocover-cobertura@latest
           "$HOME"/go/bin/gocover-cobertura < cover.out > cobertura.xml
 
-      - name: Publish Backend Coverage (cobertura)
+      - name: Publicar cobertura backend
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage-cobertura
           path: back/cobertura.xml
           if-no-files-found: warn
 
-      - name: Package Backend Artifact (zip)
+      - name: Empaquetar backend
         run: |
           set -euo pipefail
           ARTIFACT_DIR=dist
@@ -126,7 +126,7 @@ jobs:
           if [ -f .env ]; then cp .env "$ARTIFACT_DIR"/; fi
           (cd "$ARTIFACT_DIR" && zip -r ../backend-dist.zip .)
 
-      - name: Publish Backend Release Artifact
+      - name: Publicar artefacto backend
         uses: actions/upload-artifact@v4
         with:
           name: backend-dist
@@ -139,10 +139,10 @@ jobs:
       - frontend
       - backend
     steps:
-      - name: Checkout
+      - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: SonarCloud Scan
+      - name: Análisis con SonarCloud
         uses: SonarSource/sonarcloud-github-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -154,28 +154,28 @@ jobs:
       - frontend
       - backend
     steps:
-      - name: Checkout
+      - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Use Go
+      - name: Configurar Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Use Node.js
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: e2e/package-lock.json
 
-      - name: Download Backend Artifact
+      - name: Descargar artefacto backend
         uses: actions/download-artifact@v4
         with:
           name: backend-dist
           path: artifacts/backend
 
-      - name: Unpack Backend Artifact
+      - name: Descomprimir artefacto backend
         run: |
           set -euo pipefail
           rm -rf release/backend
@@ -184,44 +184,44 @@ jobs:
           chmod +x release/backend/server || true
           chmod +x release/backend/server || true
 
-      - name: Download Frontend Artifact
+      - name: Descargar artefacto frontend
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: artifacts/frontend
 
-      - name: Unpack Frontend Artifact
+      - name: Descomprimir artefacto frontend
         run: |
           set -euo pipefail
           rm -rf release/frontend
           mkdir -p release/frontend
           unzip -o artifacts/frontend/frontend-dist.zip -d release/frontend
 
-      - name: Start Backend Artifact (localhost:8080)
+      - name: Iniciar backend (localhost:8080)
         working-directory: release/backend
         run: |
           nohup bash -c 'DB_DSN=./employees.db ./server > ../../back_server.log 2>&1' &
           echo $! > ../../backend.pid
           sleep 2
 
-      - name: Start Frontend Artifact (localhost:3000)
+      - name: Iniciar frontend (localhost:3000)
         working-directory: release/frontend
         run: |
           nohup bash -c 'NEXT_PUBLIC_API_URL=http://localhost:8080 npm run start > ../../front_server.log 2>&1' &
           echo $! > ../../frontend.pid
           sleep 3
 
-      - name: Install E2E dependencies
+      - name: Instalar dependencias E2E
         working-directory: e2e
         run: npm ci
 
-      - name: Run Cypress E2E
+      - name: Ejecutar tests E2E con Cypress
         working-directory: e2e
         env:
           FRONTEND_URL: ${{ env.FRONTEND_URL }}
         run: npx cypress run --headless
 
-      - name: Publish E2E Test Results
+      - name: Publicar resultados E2E
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -229,7 +229,7 @@ jobs:
           path: e2e/cypress/results/**/*.xml
           if-no-files-found: warn
 
-      - name: Publish Cypress Videos
+      - name: Publicar videos de Cypress
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -237,7 +237,7 @@ jobs:
           path: e2e/cypress/videos
           if-no-files-found: warn
 
-      - name: Publish Cypress Screenshots
+      - name: Publicar screenshots de Cypress
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -245,7 +245,7 @@ jobs:
           path: e2e/cypress/screenshots
           if-no-files-found: warn
 
-      - name: Stop services
+      - name: Detener servicios
         if: always()
         run: |
           if [ -f backend.pid ]; then kill "$(cat backend.pid)" || true; fi
@@ -259,29 +259,29 @@ jobs:
     env:
       IMAGE_SHA_TAG: sha-${{ github.sha }}
     steps:
-      - name: Checkout
+      - name: Descargar código
         uses: actions/checkout@v4
 
-      - name: Set image names
+      - name: Definir nombres de imágenes
         run: |
           OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           REPO_NAME=$(echo "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')
           echo "FRONT_IMAGE=ghcr.io/${OWNER_LC}/${REPO_NAME}-front" >> "$GITHUB_ENV"
           echo "BACK_IMAGE=ghcr.io/${OWNER_LC}/${REPO_NAME}-back" >> "$GITHUB_ENV"
 
-      - name: Download Backend Artifact
+      - name: Descargar artefacto backend
         uses: actions/download-artifact@v4
         with:
           name: backend-dist
           path: artifacts/backend
 
-      - name: Download Frontend Artifact
+      - name: Descargar artefacto frontend
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: artifacts/frontend
 
-      - name: Prepare Release Folders
+      - name: Preparar carpetas de release
         run: |
           set -euo pipefail
           rm -rf release
@@ -290,14 +290,14 @@ jobs:
           unzip -o artifacts/backend/backend-dist.zip -d release/backend
           chmod +x release/backend/server || true
 
-      - name: Log in to GHCR
+      - name: Login en GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Frontend Image
+      - name: Build y push imagen frontend
         run: |
           set -euo pipefail
           docker build -f deploy/Dockerfile.front-runtime -t "$FRONT_IMAGE:${IMAGE_SHA_TAG}" release/frontend
@@ -305,7 +305,7 @@ jobs:
           docker push "$FRONT_IMAGE:${IMAGE_SHA_TAG}"
           docker push "$FRONT_IMAGE:dev"
 
-      - name: Build and Push Backend Image
+      - name: Build y push imagen backend
         run: |
           set -euo pipefail
           docker build -f deploy/Dockerfile.back-runtime -t "$BACK_IMAGE:${IMAGE_SHA_TAG}" release/backend
@@ -325,17 +325,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Railway CLI
+      - name: Instalar Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Redeploy Backend on Railway DEV
+      - name: Redesplegar backend en DEV
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_DEV_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_DEV_ENV}\\\", serviceId: \\\"${RAILWAY_DEV_BACKEND_SERVICE_ID}\\\") }\"}"
 
-      - name: Redeploy Frontend on Railway DEV
+      - name: Redesplegar frontend en DEV
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_DEV_TOKEN }}" \
@@ -353,42 +353,42 @@ jobs:
       IMAGE_SHA_TAG: sha-${{ github.sha }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_PROD_TOKEN }}
     steps:
-      - name: Set image names
+      - name: Definir nombres de imágenes
         run: |
           OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           REPO_NAME=$(echo "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')
           echo "FRONT_IMAGE=ghcr.io/${OWNER_LC}/${REPO_NAME}-front" >> "$GITHUB_ENV"
           echo "BACK_IMAGE=ghcr.io/${OWNER_LC}/${REPO_NAME}-back" >> "$GITHUB_ENV"
 
-      - name: Log in to GHCR
+      - name: Login en GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Promote Frontend Image to PROD tag
+      - name: Promover imagen frontend a PROD
         run: |
           set -euo pipefail
           docker pull "$FRONT_IMAGE:${IMAGE_SHA_TAG}"
           docker tag "$FRONT_IMAGE:${IMAGE_SHA_TAG}" "$FRONT_IMAGE:prod"
           docker push "$FRONT_IMAGE:prod"
 
-      - name: Promote Backend Image to PROD tag
+      - name: Promover imagen backend a PROD
         run: |
           set -euo pipefail
           docker pull "$BACK_IMAGE:${IMAGE_SHA_TAG}"
           docker tag "$BACK_IMAGE:${IMAGE_SHA_TAG}" "$BACK_IMAGE:prod"
           docker push "$BACK_IMAGE:prod"
 
-      - name: Redeploy Backend on Railway PROD
+      - name: Redesplegar backend en PROD
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_PROD_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_PROD_ENV}\\\", serviceId: \\\"${RAILWAY_PROD_BACKEND_SERVICE_ID}\\\") }\"}"
 
-      - name: Redeploy Frontend on Railway PROD
+      - name: Redesplegar frontend en PROD
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_PROD_TOKEN }}" \
