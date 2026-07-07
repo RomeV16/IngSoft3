@@ -1,60 +1,79 @@
 name: Integración y Despliegue Continuo
 
+# El pipeline se dispara en cada push a main o dev, y en Pull Requests hacia esas ramas.
+# Esto garantiza que todo código integrado pase por las etapas de calidad antes de llegar a producción.
 on:
   push:
     branches:
-      - main
-      - dev
+      - main  # rama principal: dispara el pipeline completo incluyendo deploy
+      - dev   # rama de desarrollo: corre tests y análisis pero no despliega
   pull_request:
     branches:
       - main
       - dev
 
+# Permisos mínimos necesarios:
+# - contents: read  → para hacer checkout del código
+# - packages: write → para publicar imágenes Docker en GHCR (GitHub Container Registry)
 permissions:
   contents: read
   packages: write
 
+# Variables de entorno globales disponibles en todos los jobs.
+# Los IDs de Railway se guardan como variables de repositorio en GitHub (no como secrets)
+# porque no son datos sensibles, solo identificadores.
 env:
   NODE_VERSION: "20.x"
   GO_VERSION: "1.22.x"
   RAILWAY_DEV_PROJECT_ID: ${{ vars.RAILWAY_DEV_PROJECT_ID }}
   RAILWAY_PROD_PROJECT_ID: ${{ vars.RAILWAY_PROD_PROJECT_ID }}
-  RAILWAY_DEV_ENV: ${{ vars.RAILWAY_DEV_ENV }}
-  RAILWAY_PROD_ENV: ${{ vars.RAILWAY_PROD_ENV }}
+  RAILWAY_DEV_ENV: ${{ vars.RAILWAY_DEV_ENV }}         # ID del environment DEV en Railway
+  RAILWAY_PROD_ENV: ${{ vars.RAILWAY_PROD_ENV }}       # ID del environment PROD en Railway
   RAILWAY_DEV_BACKEND_SERVICE_ID: ${{ vars.RAILWAY_DEV_BACKEND_SERVICE_ID }}
   RAILWAY_DEV_FRONTEND_SERVICE_ID: ${{ vars.RAILWAY_DEV_FRONTEND_SERVICE_ID }}
   RAILWAY_PROD_BACKEND_SERVICE_ID: ${{ vars.RAILWAY_PROD_BACKEND_SERVICE_ID }}
   RAILWAY_PROD_FRONTEND_SERVICE_ID: ${{ vars.RAILWAY_PROD_FRONTEND_SERVICE_ID }}
-  FRONTEND_DEV_URL: "https://frontend-dev-production-9326.up.railway.app"
+  FRONTEND_DEV_URL: "https://frontend-dev-production-9326.up.railway.app"  # URL pública del frontend DEV
 
 jobs:
-  # ── 1. Tests unitarios del frontend ──────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 1 — TESTS UNITARIOS DEL FRONTEND
+  # Corre en paralelo con el job "backend". Ambos son independientes entre sí.
+  # Responsabilidad: verificar que el código TypeScript/React funciona correctamente
+  # de forma aislada, sin necesidad de un servidor real.
+  # ════════════════════════════════════════════════════════════════════════════
   frontend:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: front
+        working-directory: front  # todos los comandos corren dentro de la carpeta front/
     steps:
       - name: Descargar código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # clona el repositorio en el runner
 
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: npm  # cachea node_modules para acelerar builds futuros
           cache-dependency-path: front/package-lock.json
 
       - name: Instalar dependencias
-        run: npm ci
+        run: npm ci  # instalación limpia y reproducible (usa package-lock.json exacto)
 
       - name: Tests unitarios del frontend
+        # Ejecuta Jest con cobertura de código.
+        # Si algún test falla, este paso falla y detiene el pipeline.
         run: npm run test:ci
 
       - name: Build del frontend
+        # Compila el proyecto Next.js. Detecta errores de TypeScript y build.
+        # También valida que la sintaxis del código sea correcta.
         run: npm run build
 
       - name: Empaquetar frontend
+        # Empaqueta el artefacto de producción (carpeta .next + dependencias de runtime)
+        # en un ZIP para pasarlo a los jobs siguientes sin re-buildear.
         run: |
           set -euo pipefail
           ARTIFACT_DIR=dist-artifact
@@ -71,6 +90,8 @@ jobs:
           (cd "$ARTIFACT_DIR" && zip -yr ../frontend-dist.zip .)
 
       - name: Publicar artefacto frontend
+        # Sube el ZIP al almacenamiento de artefactos de GitHub Actions.
+        # Los jobs posteriores (sonar, publish_images) lo descargan desde aquí.
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
@@ -78,13 +99,19 @@ jobs:
           if-no-files-found: error
 
       - name: Publicar cobertura frontend
+        # Sube el reporte de cobertura en formato LCOV para que SonarCloud lo consuma.
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage-lcov
           path: front/coverage/lcov.info
           if-no-files-found: warn
 
-  # ── 2. Tests unitarios del backend ───────────────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 2 — TESTS UNITARIOS DEL BACKEND
+  # Corre en paralelo con el job "frontend".
+  # Responsabilidad: verificar que la lógica de negocio en Go funciona correctamente.
+  # Incluye un gate de cobertura mínima (70%) — si no se alcanza, el pipeline falla.
+  # ════════════════════════════════════════════════════════════════════════════
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -100,11 +127,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Tests unitarios y gate de cobertura backend
+        # "make cover" corre los tests con -coverprofile
+        # "make check-cover" verifica que la cobertura supera el umbral mínimo (70%)
+        # Si la cobertura es insuficiente, este paso falla y el pipeline se detiene.
         run: |
           make cover
           make check-cover
 
       - name: Convertir cobertura a Cobertura
+        # SonarCloud espera el reporte en formato XML (Cobertura).
+        # gocover-cobertura convierte el formato nativo de Go (.out) a XML.
         run: |
           go install github.com/t-yuki/gocover-cobertura@latest
           "$HOME"/go/bin/gocover-cobertura < cover.out > cobertura.xml
@@ -117,6 +149,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Empaquetar backend
+        # Compila el binario Go y lo empaqueta en un ZIP.
+        # "go build" produce un único ejecutable estático sin dependencias externas.
         run: |
           set -euo pipefail
           ARTIFACT_DIR=dist
@@ -133,47 +167,67 @@ jobs:
           path: back/backend-dist.zip
           if-no-files-found: error
 
-  # ── 3. Análisis estático de código con SonarCloud ────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 3 — ANÁLISIS ESTÁTICO CON SONARCLOUD
+  # Depende de: frontend + backend (necesita los reportes de cobertura de ambos)
+  # Responsabilidad: analizar calidad del código, detectar code smells, bugs,
+  # vulnerabilidades y verificar que se cumpla el Quality Gate definido en SonarCloud.
+  # Corre en todas las ramas (main y dev) para detectar problemas antes de mergear.
+  # ════════════════════════════════════════════════════════════════════════════
   sonar:
     runs-on: ubuntu-latest
     needs:
-      - frontend
-      - backend
+      - frontend  # espera que los tests y la cobertura del frontend estén listos
+      - backend   # espera que los tests y la cobertura del backend estén listos
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
 
       - name: Descargar cobertura frontend
+        # Descarga el lcov.info generado por Jest para que SonarCloud lo lea
         uses: actions/download-artifact@v4
         with:
           name: frontend-coverage-lcov
           path: front/coverage
 
       - name: Descargar cobertura backend
+        # Descarga el cobertura.xml generado por gocover-cobertura
         uses: actions/download-artifact@v4
         with:
           name: backend-coverage-cobertura
           path: back
 
       - name: Análisis estático con SonarCloud
+        # Lee la configuración de sonar-project.properties en la raíz del repo.
+        # SONAR_TOKEN es un secret de GitHub → Settings → Secrets → SONAR_TOKEN
+        # Si el Quality Gate falla, este paso falla y el pipeline se detiene.
         uses: SonarSource/sonarcloud-github-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
 
-  # ── 4. Publicar imágenes Docker en GHCR (solo en main) ───────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 4 — PUBLICAR IMÁGENES DOCKER EN GHCR
+  # Solo corre en push a main (no en dev ni en PRs).
+  # Depende de: sonar (el análisis debe pasar antes de publicar)
+  # Responsabilidad: construir las imágenes Docker del frontend y backend
+  # y subirlas al GitHub Container Registry (ghcr.io).
+  # Las imágenes se tagean con el SHA del commit para trazabilidad completa.
+  # ════════════════════════════════════════════════════════════════════════════
   publish_images:
     runs-on: ubuntu-latest
     needs:
-      - sonar
+      - sonar  # solo publicamos si el análisis de calidad pasó
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
-      IMAGE_SHA_TAG: sha-${{ github.sha }}
+      IMAGE_SHA_TAG: sha-${{ github.sha }}  # tag único por commit para trazabilidad
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
 
       - name: Definir nombres de imágenes
+        # Convierte el nombre del repo a minúsculas porque Docker no acepta mayúsculas en tags.
+        # Ejemplo: ghcr.io/romev16/ingsoft3-front:sha-abc123
         run: |
           OWNER_LC=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           REPO_NAME=$(echo "${GITHUB_REPOSITORY#*/}" | tr '[:upper:]' '[:lower:]')
@@ -193,6 +247,7 @@ jobs:
           path: artifacts/frontend
 
       - name: Preparar carpetas de release
+        # Descomprime los artefactos en carpetas separadas para el build de Docker
         run: |
           set -euo pipefail
           rm -rf release
@@ -202,14 +257,18 @@ jobs:
           chmod +x release/backend/server || true
 
       - name: Login en GHCR
+        # Autentica Docker contra el registro de GitHub usando el token automático del runner.
+        # GITHUB_TOKEN es un token temporal generado automáticamente por GitHub Actions.
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Aquí se construyen y publican las imágenes Docker en el registro GHCR
       - name: Build y push imagen frontend
+        # 1. Construye la imagen usando deploy/Dockerfile.front-runtime
+        # 2. La tagea con el SHA del commit (trazabilidad) y con :dev (último deploy)
+        # 3. Publica ambos tags en GHCR
         run: |
           set -euo pipefail
           docker build -f deploy/Dockerfile.front-runtime -t "$FRONT_IMAGE:${IMAGE_SHA_TAG}" release/frontend
@@ -218,6 +277,8 @@ jobs:
           docker push "$FRONT_IMAGE:dev"
 
       - name: Build y push imagen backend
+        # Igual que el frontend: build → tag → push
+        # La imagen contiene el binario Go compilado y un entrypoint mínimo
         run: |
           set -euo pipefail
           docker build -f deploy/Dockerfile.back-runtime -t "$BACK_IMAGE:${IMAGE_SHA_TAG}" release/backend
@@ -225,20 +286,29 @@ jobs:
           docker push "$BACK_IMAGE:${IMAGE_SHA_TAG}"
           docker push "$BACK_IMAGE:dev"
 
-  # ── 5. Desplegar en entorno DEV (automático) ──────────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 5 — DESPLEGAR EN ENTORNO DEV (automático)
+  # Solo corre en push a main.
+  # Depende de: publish_images (las imágenes deben estar publicadas primero)
+  # Responsabilidad: redesplegar los servicios de Railway DEV con las nuevas imágenes.
+  # Este deploy es AUTOMÁTICO — no requiere aprobación humana.
+  # Usa el environment "dev" de GitHub (configurado en Settings → Environments).
+  # ════════════════════════════════════════════════════════════════════════════
   deploy_dev:
     runs-on: ubuntu-latest
     needs:
       - publish_images
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
-      name: dev
+      name: dev  # activa el environment "dev" de GitHub (puede tener sus propios secrets)
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_DEV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Redesplegar backend en DEV
+        # Llama a la API GraphQL de Railway para forzar un nuevo deploy del servicio backend.
+        # Railway toma la imagen :dev que acabamos de publicar en GHCR.
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_DEV_TOKEN }}" \
@@ -253,13 +323,22 @@ jobs:
             -d "{\"query\":\"mutation { serviceInstanceDeploy(environmentId: \\\"${RAILWAY_DEV_ENV}\\\", serviceId: \\\"${RAILWAY_DEV_FRONTEND_SERVICE_ID}\\\") }\"}"
 
       - name: Esperar que DEV esté listo
+        # Pausa 30 segundos para que Railway termine de levantar los containers
+        # antes de que el job de E2E empiece a correr los tests.
         run: sleep 30
 
-  # ── 6. Tests E2E contra el entorno DEV desplegado ────────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 6 — TESTS E2E (End-to-End) CONTRA EL ENTORNO DEV
+  # Solo corre en push a main.
+  # Depende de: deploy_dev (el entorno real debe estar desplegado y funcionando)
+  # Responsabilidad: verificar que el sistema completo funciona de punta a punta:
+  # frontend → backend → base de datos. Usa Cypress con un navegador headless.
+  # Los E2E van AL FINAL del pipeline (no antes) porque necesitan el sistema desplegado.
+  # ════════════════════════════════════════════════════════════════════════════
   e2e:
     runs-on: ubuntu-latest
     needs:
-      - deploy_dev
+      - deploy_dev  # espera que DEV esté desplegado con la nueva versión
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Descargar código
@@ -277,13 +356,17 @@ jobs:
         run: npm ci
 
       - name: Ejecutar tests E2E con Cypress contra DEV
+        # FRONTEND_URL: URL del frontend en Railway DEV (donde navega Cypress)
+        # API_URL: URL del backend en Railway DEV (para crear datos de prueba via cy.request)
+        # Los tests navegan el frontend real y verifican que todo el flujo funcione.
         working-directory: e2e
         env:
           FRONTEND_URL: ${{ env.FRONTEND_DEV_URL }}
         run: npx cypress run --headless --env API_URL=https://backend-dev-production-ba11.up.railway.app
 
       - name: Publicar resultados E2E
-        if: always()
+        # Sube los resultados XML de JUnit para que GitHub los muestre en la UI
+        if: always()  # siempre sube los resultados, incluso si los tests fallaron
         uses: actions/upload-artifact@v4
         with:
           name: cypress-results
@@ -291,6 +374,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publicar videos de Cypress
+        # Cypress graba video de cada spec. Muy útil para debuggear tests fallidos.
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -299,6 +383,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publicar screenshots de Cypress
+        # Cypress toma screenshot automáticamente cuando un test falla
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -306,14 +391,23 @@ jobs:
           path: e2e/cypress/screenshots
           if-no-files-found: warn
 
-  # ── 7. Promover a PROD (requiere aprobación manual) ───────────────────────────
+  # ════════════════════════════════════════════════════════════════════════════
+  # JOB 7 — PROMOVER A PRODUCCIÓN (requiere aprobación manual)
+  # Solo corre en push a main.
+  # Depende de: e2e (los tests E2E deben pasar antes de ir a PROD)
+  # Responsabilidad: taguear las imágenes Docker como :prod y redesplegar en Railway PROD.
+  # Este deploy es MANUAL — el pipeline se pausa y espera que un revisor humano
+  # apruete el botón "Review deployments" en GitHub Actions.
+  # La aprobación manual se configura en GitHub → Settings → Environments → prod
+  # → Protection rules → Required reviewers.
+  # ════════════════════════════════════════════════════════════════════════════
   promote_prod:
     runs-on: ubuntu-latest
     needs:
-      - e2e
+      - e2e  # solo promueve a PROD si los tests E2E pasaron en DEV
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
-      name: prod
+      name: prod  # este environment tiene "Required reviewers" → pausa el pipeline
     env:
       IMAGE_SHA_TAG: sha-${{ github.sha }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_PROD_TOKEN }}
@@ -333,6 +427,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Promover imagen frontend a PROD
+        # Reutiliza la misma imagen que se desplegó en DEV (mismo SHA).
+        # Solo la retagea como :prod — NO se hace un nuevo build.
+        # Esto garantiza que lo que se testeó en DEV es exactamente lo que va a PROD.
         run: |
           set -euo pipefail
           docker pull "$FRONT_IMAGE:${IMAGE_SHA_TAG}"
@@ -347,6 +444,7 @@ jobs:
           docker push "$BACK_IMAGE:prod"
 
       - name: Redesplegar backend en PROD
+        # Railway toma la imagen :prod que acabamos de publicar y la despliega.
         run: |
           curl -s -X POST https://backboard.railway.com/graphql/v2 \
             -H "Authorization: Bearer ${{ secrets.RAILWAY_PROD_TOKEN }}" \
