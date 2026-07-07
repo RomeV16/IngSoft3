@@ -7,7 +7,10 @@ import (
 )
 
 func main() {
-	dsn := os.Getenv("DB_DSN")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("DB_DSN")
+	}
 	if dsn == "" {
 		dsn = "./employees.db"
 	}

@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
+	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
 
@@ -83,7 +85,8 @@ var ErrNotFound = errors.New("not found")
 var ErrInvalidTransition = errors.New("invalid transition")
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	postgres bool
 }
 
 const (
@@ -93,11 +96,31 @@ const (
 )
 
 func NewStore(dsn string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	driver := "sqlite"
+	postgres := false
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		driver = "postgres"
+		postgres = true
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, postgres: postgres}, nil
+}
+
+// pq replaces ? placeholders with $1, $2, ... for PostgreSQL.
+var rePlaceholder = regexp.MustCompile(`\?`)
+
+func (s *Store) pq(query string) string {
+	if !s.postgres {
+		return query
+	}
+	n := 0
+	return rePlaceholder.ReplaceAllStringFunc(query, func(_ string) string {
+		n++
+		return fmt.Sprintf("$%d", n)
+	})
 }
 
 func (s *Store) Close() error {
@@ -108,39 +131,77 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Init() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS employees (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL
-		);
+	var schema string
+	if s.postgres {
+		schema = `
+			CREATE TABLE IF NOT EXISTS employees (
+				id SERIAL PRIMARY KEY,
+				name TEXT NOT NULL
+			);
 
-		CREATE TABLE IF NOT EXISTS performance_reviews (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			employee_id INTEGER NOT NULL,
-			period TEXT NOT NULL,
-			reviewer TEXT NOT NULL,
-			rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
-			strengths TEXT,
-			opportunities TEXT,
-			state TEXT NOT NULL,
-			FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
-		);
-		CREATE INDEX IF NOT EXISTS idx_reviews_employee_period ON performance_reviews(employee_id, period);
+			CREATE TABLE IF NOT EXISTS performance_reviews (
+				id SERIAL PRIMARY KEY,
+				employee_id INTEGER NOT NULL,
+				period TEXT NOT NULL,
+				reviewer TEXT NOT NULL,
+				rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+				strengths TEXT,
+				opportunities TEXT,
+				state TEXT NOT NULL,
+				FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_reviews_employee_period ON performance_reviews(employee_id, period);
 
-		CREATE TABLE IF NOT EXISTS payroll_records (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			employee_id INTEGER NOT NULL,
-			period TEXT NOT NULL,
-			base_salary REAL NOT NULL,
-			overtime_hours REAL NOT NULL DEFAULT 0,
-			overtime_rate REAL NOT NULL DEFAULT 0,
-			bonuses REAL NOT NULL DEFAULT 0,
-			deductions REAL NOT NULL DEFAULT 0,
-			net_pay REAL NOT NULL,
-			FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
-		);
-		CREATE INDEX IF NOT EXISTS idx_payroll_employee_period ON payroll_records(employee_id, period);
-	`)
+			CREATE TABLE IF NOT EXISTS payroll_records (
+				id SERIAL PRIMARY KEY,
+				employee_id INTEGER NOT NULL,
+				period TEXT NOT NULL,
+				base_salary DOUBLE PRECISION NOT NULL,
+				overtime_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+				overtime_rate DOUBLE PRECISION NOT NULL DEFAULT 0,
+				bonuses DOUBLE PRECISION NOT NULL DEFAULT 0,
+				deductions DOUBLE PRECISION NOT NULL DEFAULT 0,
+				net_pay DOUBLE PRECISION NOT NULL,
+				FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_payroll_employee_period ON payroll_records(employee_id, period);
+		`
+	} else {
+		schema = `
+			CREATE TABLE IF NOT EXISTS employees (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL
+			);
+
+			CREATE TABLE IF NOT EXISTS performance_reviews (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				employee_id INTEGER NOT NULL,
+				period TEXT NOT NULL,
+				reviewer TEXT NOT NULL,
+				rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+				strengths TEXT,
+				opportunities TEXT,
+				state TEXT NOT NULL,
+				FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_reviews_employee_period ON performance_reviews(employee_id, period);
+
+			CREATE TABLE IF NOT EXISTS payroll_records (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				employee_id INTEGER NOT NULL,
+				period TEXT NOT NULL,
+				base_salary REAL NOT NULL,
+				overtime_hours REAL NOT NULL DEFAULT 0,
+				overtime_rate REAL NOT NULL DEFAULT 0,
+				bonuses REAL NOT NULL DEFAULT 0,
+				deductions REAL NOT NULL DEFAULT 0,
+				net_pay REAL NOT NULL,
+				FOREIGN KEY(employee_id) REFERENCES employees(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_payroll_employee_period ON payroll_records(employee_id, period);
+		`
+	}
+	_, err := s.db.Exec(schema)
 	return err
 }
 
@@ -151,7 +212,6 @@ func (s *Store) ListEmployees() ([]Employee, error) {
 	}
 	defer rows.Close()
 
-	// Ensure non-nil slice so JSON encodes as [] instead of null
 	result := make([]Employee, 0)
 	for rows.Next() {
 		var e Employee
@@ -164,11 +224,8 @@ func (s *Store) ListEmployees() ([]Employee, error) {
 }
 
 func (s *Store) CreateEmployee(name string) (Employee, error) {
-	res, err := s.db.Exec("INSERT INTO employees(name) VALUES(?)", name)
-	if err != nil {
-		return Employee{}, err
-	}
-	id, err := res.LastInsertId()
+	var id int64
+	err := s.db.QueryRow(s.pq("INSERT INTO employees(name) VALUES(?) RETURNING id"), name).Scan(&id)
 	if err != nil {
 		return Employee{}, err
 	}
@@ -176,7 +233,7 @@ func (s *Store) CreateEmployee(name string) (Employee, error) {
 }
 
 func (s *Store) UpdateEmployee(id int64, name string) (Employee, error) {
-	res, err := s.db.Exec("UPDATE employees SET name=? WHERE id=?", name, id)
+	res, err := s.db.Exec(s.pq("UPDATE employees SET name=? WHERE id=?"), name, id)
 	if err != nil {
 		return Employee{}, err
 	}
@@ -191,7 +248,7 @@ func (s *Store) UpdateEmployee(id int64, name string) (Employee, error) {
 }
 
 func (s *Store) DeleteEmployee(id int64) error {
-	res, err := s.db.Exec("DELETE FROM employees WHERE id=?", id)
+	res, err := s.db.Exec(s.pq("DELETE FROM employees WHERE id=?"), id)
 	if err != nil {
 		return err
 	}
@@ -225,7 +282,7 @@ func (s *Store) ListPerformanceReviews(filter PerformanceReviewFilter) ([]Perfor
 	}
 	builder.WriteString(" ORDER BY r.id DESC")
 
-	rows, err := s.db.Query(builder.String(), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -282,14 +339,11 @@ func (s *Store) CreatePerformanceReview(input PerformanceReviewInput) (Performan
 	if err := validateReviewInput(input); err != nil {
 		return PerformanceReview{}, err
 	}
-	res, err := s.db.Exec(`INSERT INTO performance_reviews
+	var id int64
+	err := s.db.QueryRow(s.pq(`INSERT INTO performance_reviews
 		(employee_id, period, reviewer, rating, strengths, opportunities, state)
-		VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		input.EmployeeID, input.Period, input.Reviewer, input.Rating, input.Strengths, input.Opportunities, ReviewStateDraft)
-	if err != nil {
-		return PerformanceReview{}, err
-	}
-	id, err := res.LastInsertId()
+		VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING id`),
+		input.EmployeeID, input.Period, input.Reviewer, input.Rating, input.Strengths, input.Opportunities, ReviewStateDraft).Scan(&id)
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -326,7 +380,7 @@ func (s *Store) UpdatePerformanceReview(id int64, update PerformanceReviewUpdate
 		return PerformanceReview{}, err
 	}
 	args = append(args, id)
-	res, err := s.db.Exec(`UPDATE performance_reviews SET `+setClauseString+` WHERE id = ?`, args...)
+	res, err := s.db.Exec(s.pq(`UPDATE performance_reviews SET `+setClauseString+` WHERE id = ?`), args...)
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -345,11 +399,10 @@ func (s *Store) TransitionPerformanceReview(id int64, nextState string) (Perform
 	if err != nil {
 		return PerformanceReview{}, err
 	}
-	valid := isValidTransition(review.State, nextState)
-	if !valid {
+	if !isValidTransition(review.State, nextState) {
 		return PerformanceReview{}, ErrInvalidTransition
 	}
-	_, err = s.db.Exec(`UPDATE performance_reviews SET state = ? WHERE id = ?`, nextState, id)
+	_, err = s.db.Exec(s.pq(`UPDATE performance_reviews SET state = ? WHERE id = ?`), nextState, id)
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -357,10 +410,10 @@ func (s *Store) TransitionPerformanceReview(id int64, nextState string) (Perform
 }
 
 func (s *Store) getPerformanceReviewByID(id int64) (PerformanceReview, error) {
-	row := s.db.QueryRow(`SELECT r.id, r.employee_id, e.name, r.period, r.reviewer, r.rating, r.strengths, r.opportunities, r.state
+	row := s.db.QueryRow(s.pq(`SELECT r.id, r.employee_id, e.name, r.period, r.reviewer, r.rating, r.strengths, r.opportunities, r.state
 		FROM performance_reviews r
 		JOIN employees e ON e.id = r.employee_id
-		WHERE r.id = ?`, id)
+		WHERE r.id = ?`), id)
 	var pr PerformanceReview
 	if err := row.Scan(&pr.ID, &pr.EmployeeID, &pr.EmployeeName, &pr.Period, &pr.Reviewer, &pr.Rating, &pr.Strengths, &pr.Opportunities, &pr.State); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -381,10 +434,7 @@ func validateReviewInput(input PerformanceReviewInput) error {
 	if strings.TrimSpace(input.Reviewer) == "" {
 		return fmt.Errorf("reviewer is required")
 	}
-	if err := validateRating(input.Rating); err != nil {
-		return err
-	}
-	return nil
+	return validateRating(input.Rating)
 }
 
 func validateRating(rating int) error {
@@ -425,7 +475,7 @@ func (s *Store) ListReviewAggregates(filter PerformanceReviewFilter) ([]ReviewEm
 	}
 	builder.WriteString(" GROUP BY e.id, e.name")
 
-	rows, err := s.db.Query(builder.String(), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +512,7 @@ func (s *Store) ListPayrollRecords(filter PayrollFilter) ([]PayrollRecord, error
 	}
 	builder.WriteString(" ORDER BY p.period DESC, p.id DESC")
 
-	rows, err := s.db.Query(builder.String(), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -508,14 +558,11 @@ func (s *Store) CreatePayrollRecord(input PayrollRecordInput) (PayrollRecord, er
 		return PayrollRecord{}, err
 	}
 	net := calculateNetPay(input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions)
-	res, err := s.db.Exec(`INSERT INTO payroll_records
+	var id int64
+	err := s.db.QueryRow(s.pq(`INSERT INTO payroll_records
 		(employee_id, period, base_salary, overtime_hours, overtime_rate, bonuses, deductions, net_pay)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		input.EmployeeID, input.Period, input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions, net)
-	if err != nil {
-		return PayrollRecord{}, err
-	}
-	id, err := res.LastInsertId()
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`),
+		input.EmployeeID, input.Period, input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions, net).Scan(&id)
 	if err != nil {
 		return PayrollRecord{}, err
 	}
@@ -543,10 +590,10 @@ func validatePayrollInput(input PayrollRecordInput) error {
 }
 
 func (s *Store) getPayrollByID(id int64) (PayrollRecord, error) {
-	row := s.db.QueryRow(`SELECT p.id, p.employee_id, e.name, p.period, p.base_salary, p.overtime_hours, p.overtime_rate, p.bonuses, p.deductions, p.net_pay
+	row := s.db.QueryRow(s.pq(`SELECT p.id, p.employee_id, e.name, p.period, p.base_salary, p.overtime_hours, p.overtime_rate, p.bonuses, p.deductions, p.net_pay
 		FROM payroll_records p
 		JOIN employees e ON e.id = p.employee_id
-		WHERE p.id = ?`, id)
+		WHERE p.id = ?`), id)
 	var pr PayrollRecord
 	if err := row.Scan(&pr.ID, &pr.EmployeeID, &pr.EmployeeName, &pr.Period, &pr.BaseSalary, &pr.OvertimeHours, &pr.OvertimeRate, &pr.Bonuses, &pr.Deductions, &pr.NetPay); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -574,7 +621,7 @@ func (s *Store) PayrollTotals(filter PayrollFilter) ([]PayrollPeriodTotal, float
 	}
 	builder.WriteString(" GROUP BY p.period ORDER BY p.period DESC")
 
-	rows, err := s.db.Query(builder.String(), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...)
 	if err != nil {
 		return nil, 0, err
 	}

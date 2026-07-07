@@ -2,7 +2,10 @@ module tp07/back
 
 go 1.24.0
 
-require modernc.org/sqlite v1.40.0
+require (
+	github.com/lib/pq v1.12.3
+	modernc.org/sqlite v1.40.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
