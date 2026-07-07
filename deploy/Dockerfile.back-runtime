@@ -7,10 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY server ./server
 
 # Create a directory for the database and ensure it has the correct permissions
-RUN mkdir -p /data && chown -R 10001:10001 /data
-
-# Run as a non-root user
-USER 10001
+RUN mkdir -p /data
 
 ENV PORT=8080
 ENV DB_DSN=/data/employees.db
