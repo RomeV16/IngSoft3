@@ -94,7 +94,7 @@ export default function PayrollForm({ employees, onSubmit, submitLabel }: Props)
   }
 
   return (
-    <Stack as="form" spacing={4} aria-label="payroll-form" onSubmit={handleSubmit}>
+    <Stack as="form" spacing={4} aria-label="payroll-formulario" onSubmit={handleSubmit}>
       {error && (
         <Alert status="error" borderRadius="md">
           <AlertIcon />
