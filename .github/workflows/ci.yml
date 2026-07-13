@@ -271,7 +271,7 @@ jobs:
         # 3. Publica ambos tags en GHCR
         run: |
           set -euo pipefail
-          docker build -f deploy/Dockerfile.front-runtime -t "$FRONT_IMAGE:${IMAGE_SHA_TAG}" release/frontend
+          docker build --provenance=false -f deploy/Dockerfile.front-runtime -t "$FRONT_IMAGE:${IMAGE_SHA_TAG}" release/frontend
           docker tag "$FRONT_IMAGE:${IMAGE_SHA_TAG}" "$FRONT_IMAGE:dev"
           docker push "$FRONT_IMAGE:${IMAGE_SHA_TAG}"
           docker push "$FRONT_IMAGE:dev"
@@ -281,7 +281,7 @@ jobs:
         # La imagen contiene el binario Go compilado y un entrypoint mínimo
         run: |
           set -euo pipefail
-          docker build -f deploy/Dockerfile.back-runtime -t "$BACK_IMAGE:${IMAGE_SHA_TAG}" release/backend
+          docker build --provenance=false -f deploy/Dockerfile.back-runtime -t "$BACK_IMAGE:${IMAGE_SHA_TAG}" release/backend
           docker tag "$BACK_IMAGE:${IMAGE_SHA_TAG}" "$BACK_IMAGE:dev"
           docker push "$BACK_IMAGE:${IMAGE_SHA_TAG}"
           docker push "$BACK_IMAGE:dev"
