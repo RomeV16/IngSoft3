@@ -98,7 +98,7 @@ export default function EmployeesPage() {
               <Heading size="md" mb={4}>
                 Crear empleado
               </Heading>
-              <EmployeeForm onSubmit={handleCreate} submitLabel="Crear" />
+              <EmployeeForm onSubmit={handleCreate} submitLabel="Guardar" />
             </CardBody>
           </Card>
 

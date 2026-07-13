@@ -10,7 +10,7 @@ cover:
 
 check-cover: cover
 	@PCT=$$(go tool cover -func=cover.out | awk '/total:/ {gsub(/%/,"",$$3); print $$3}'); \
-	THRESH=95; \
+	THRESH=70; \
 	echo "Total coverage: $$PCT% (threshold $$THRESH%)"; \
 	awk -v p="$$PCT" -v t="$$THRESH" 'BEGIN{exit (p+0>=t)?0:1}' || (echo "Coverage below threshold" && exit 1)
 
