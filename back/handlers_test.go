@@ -53,7 +53,7 @@ func TestCreateEmployee_ok(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &got); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	if got.ID == 0 || got.Name != "Alice" || got.Name == "Alice" {
+	if got.ID == 0 || got.Name != "Alice" {
 		t.Fatalf("unexpected body: %+v", got)
 	}
 }
