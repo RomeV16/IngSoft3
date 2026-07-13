@@ -132,18 +132,13 @@ jobs:
         run: |
           make cover
 
-      - name: Convertir cobertura a Cobertura
-        # SonarCloud espera el reporte en formato XML (Cobertura).
-        # gocover-cobertura convierte el formato nativo de Go (.out) a XML.
-        run: |
-          go install github.com/t-yuki/gocover-cobertura@latest
-          "$HOME"/go/bin/gocover-cobertura < cover.out > cobertura.xml
-
       - name: Publicar cobertura backend
+        # Sube el cover.out nativo de Go — es el formato que SonarCloud lee
+        # según sonar-project.properties (sonar.go.coverage.reportPaths=cover.out)
         uses: actions/upload-artifact@v4
         with:
-          name: backend-coverage-cobertura
-          path: back/cobertura.xml
+          name: backend-coverage-go
+          path: back/cover.out
           if-no-files-found: warn
 
       - name: Empaquetar backend
@@ -189,10 +184,10 @@ jobs:
           path: front/coverage
 
       - name: Descargar cobertura backend
-        # Descarga el cobertura.xml generado por gocover-cobertura
+        # Descarga el cover.out generado por go test
         uses: actions/download-artifact@v4
         with:
-          name: backend-coverage-cobertura
+          name: backend-coverage-go
           path: back
 
       - name: Análisis estático con SonarCloud
