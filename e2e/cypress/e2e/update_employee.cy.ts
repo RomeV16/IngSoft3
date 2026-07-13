@@ -1,5 +1,17 @@
 describe("Update employee", () => {
   it("edits the last employee and verifies the change", () => {
+    const apiUrl = Cypress.env("API_URL") || "http://localhost:8080";
+    // limpiar residuos de corridas anteriores para que el test sea determinista
+    cy.request(`${apiUrl}/employees`).then((resp) => {
+      const leftovers = resp.body.filter(
+        (e: { id: number; name: string }) =>
+          e.name === "User To Edit" || e.name === "User Edited"
+      );
+      leftovers.forEach((e: { id: number }) => {
+        cy.request("DELETE", `${apiUrl}/employees/${e.id}`);
+      });
+    });
+
     cy.visit("/employees");
     // ensure at least one employee exists
     cy.get('form[aria-label="employee-form"] input[aria-label="name"]').type(
