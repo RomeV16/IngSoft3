@@ -654,3 +654,16 @@ func joinAllowedClauses(clauses []string, allowed map[string]struct{}, sep strin
 	}
 	return strings.Join(clauses, sep), nil
 }
+
+// stubs para el módulo de reportes avanzados (sin implementar — sin tests)
+func (s *Store) DepartmentSummaries(from, to string) ([]departmentSummary, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *Store) PayrollByPeriod(period string) ([]PayrollRecord, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (s *Store) AuditLog() ([]auditEntry, error) {
+	return nil, errors.New("not implemented")
+}
