@@ -6,7 +6,8 @@ import (
 	"os"
 )
 
-func main() {
+// resolveDSN determina la cadena de conexión: DATABASE_URL > DB_DSN > SQLite local.
+func resolveDSN() string {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = os.Getenv("DB_DSN")
@@ -14,7 +15,11 @@ func main() {
 	if dsn == "" {
 		dsn = "./employees.db"
 	}
-	store, err := NewStore(dsn)
+	return dsn
+}
+
+func main() {
+	store, err := NewStore(resolveDSN())
 	if err != nil {
 		log.Fatalf("failed to open db: %v", err)
 	}

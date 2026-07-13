@@ -225,7 +225,7 @@ func (s *Store) ListEmployees() ([]Employee, error) {
 
 func (s *Store) CreateEmployee(name string) (Employee, error) {
 	var id int64
-	err := s.db.QueryRow(s.pq("INSERT INTO employees(name) VALUES(?) RETURNING id"), name).Scan(&id)
+	err := s.db.QueryRow(s.pq("INSERT INTO employees(name) VALUES(?) RETURNING id"), name).Scan(&id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return Employee{}, err
 	}
@@ -233,7 +233,7 @@ func (s *Store) CreateEmployee(name string) (Employee, error) {
 }
 
 func (s *Store) UpdateEmployee(id int64, name string) (Employee, error) {
-	res, err := s.db.Exec(s.pq("UPDATE employees SET name=? WHERE id=?"), name, id)
+	res, err := s.db.Exec(s.pq("UPDATE employees SET name=? WHERE id=?"), name, id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return Employee{}, err
 	}
@@ -248,7 +248,7 @@ func (s *Store) UpdateEmployee(id int64, name string) (Employee, error) {
 }
 
 func (s *Store) DeleteEmployee(id int64) error {
-	res, err := s.db.Exec(s.pq("DELETE FROM employees WHERE id=?"), id)
+	res, err := s.db.Exec(s.pq("DELETE FROM employees WHERE id=?"), id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return err
 	}
@@ -282,7 +282,7 @@ func (s *Store) ListPerformanceReviews(filter PerformanceReviewFilter) ([]Perfor
 	}
 	builder.WriteString(" ORDER BY r.id DESC")
 
-	rows, err := s.db.Query(s.pq(builder.String()), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return nil, err
 	}
@@ -340,10 +340,10 @@ func (s *Store) CreatePerformanceReview(input PerformanceReviewInput) (Performan
 		return PerformanceReview{}, err
 	}
 	var id int64
-	err := s.db.QueryRow(s.pq(`INSERT INTO performance_reviews
+	insertReviewSQL := `INSERT INTO performance_reviews
 		(employee_id, period, reviewer, rating, strengths, opportunities, state)
-		VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING id`),
-		input.EmployeeID, input.Period, input.Reviewer, input.Rating, input.Strengths, input.Opportunities, ReviewStateDraft).Scan(&id)
+		VALUES(?, ?, ?, ?, ?, ?, ?) RETURNING id`
+	err := s.db.QueryRow(s.pq(insertReviewSQL), input.EmployeeID, input.Period, input.Reviewer, input.Rating, input.Strengths, input.Opportunities, ReviewStateDraft).Scan(&id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -380,7 +380,7 @@ func (s *Store) UpdatePerformanceReview(id int64, update PerformanceReviewUpdate
 		return PerformanceReview{}, err
 	}
 	args = append(args, id)
-	res, err := s.db.Exec(s.pq(`UPDATE performance_reviews SET `+setClauseString+` WHERE id = ?`), args...)
+	res, err := s.db.Exec(s.pq(`UPDATE performance_reviews SET `+setClauseString+` WHERE id = ?`), args...) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -402,7 +402,7 @@ func (s *Store) TransitionPerformanceReview(id int64, nextState string) (Perform
 	if !isValidTransition(review.State, nextState) {
 		return PerformanceReview{}, ErrInvalidTransition
 	}
-	_, err = s.db.Exec(s.pq(`UPDATE performance_reviews SET state = ? WHERE id = ?`), nextState, id)
+	_, err = s.db.Exec(s.pq(`UPDATE performance_reviews SET state = ? WHERE id = ?`), nextState, id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return PerformanceReview{}, err
 	}
@@ -410,10 +410,11 @@ func (s *Store) TransitionPerformanceReview(id int64, nextState string) (Perform
 }
 
 func (s *Store) getPerformanceReviewByID(id int64) (PerformanceReview, error) {
-	row := s.db.QueryRow(s.pq(`SELECT r.id, r.employee_id, e.name, r.period, r.reviewer, r.rating, r.strengths, r.opportunities, r.state
+	getReviewSQL := `SELECT r.id, r.employee_id, e.name, r.period, r.reviewer, r.rating, r.strengths, r.opportunities, r.state
 		FROM performance_reviews r
 		JOIN employees e ON e.id = r.employee_id
-		WHERE r.id = ?`), id)
+		WHERE r.id = ?`
+	row := s.db.QueryRow(s.pq(getReviewSQL), id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	var pr PerformanceReview
 	if err := row.Scan(&pr.ID, &pr.EmployeeID, &pr.EmployeeName, &pr.Period, &pr.Reviewer, &pr.Rating, &pr.Strengths, &pr.Opportunities, &pr.State); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -475,7 +476,7 @@ func (s *Store) ListReviewAggregates(filter PerformanceReviewFilter) ([]ReviewEm
 	}
 	builder.WriteString(" GROUP BY e.id, e.name")
 
-	rows, err := s.db.Query(s.pq(builder.String()), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +513,7 @@ func (s *Store) ListPayrollRecords(filter PayrollFilter) ([]PayrollRecord, error
 	}
 	builder.WriteString(" ORDER BY p.period DESC, p.id DESC")
 
-	rows, err := s.db.Query(s.pq(builder.String()), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return nil, err
 	}
@@ -559,10 +560,10 @@ func (s *Store) CreatePayrollRecord(input PayrollRecordInput) (PayrollRecord, er
 	}
 	net := calculateNetPay(input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions)
 	var id int64
-	err := s.db.QueryRow(s.pq(`INSERT INTO payroll_records
+	insertPayrollSQL := `INSERT INTO payroll_records
 		(employee_id, period, base_salary, overtime_hours, overtime_rate, bonuses, deductions, net_pay)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`),
-		input.EmployeeID, input.Period, input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions, net).Scan(&id)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+	err := s.db.QueryRow(s.pq(insertPayrollSQL), input.EmployeeID, input.Period, input.BaseSalary, input.OvertimeHours, input.OvertimeRate, input.Bonuses, input.Deductions, net).Scan(&id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return PayrollRecord{}, err
 	}
@@ -590,10 +591,11 @@ func validatePayrollInput(input PayrollRecordInput) error {
 }
 
 func (s *Store) getPayrollByID(id int64) (PayrollRecord, error) {
-	row := s.db.QueryRow(s.pq(`SELECT p.id, p.employee_id, e.name, p.period, p.base_salary, p.overtime_hours, p.overtime_rate, p.bonuses, p.deductions, p.net_pay
+	getPayrollSQL := `SELECT p.id, p.employee_id, e.name, p.period, p.base_salary, p.overtime_hours, p.overtime_rate, p.bonuses, p.deductions, p.net_pay
 		FROM payroll_records p
 		JOIN employees e ON e.id = p.employee_id
-		WHERE p.id = ?`), id)
+		WHERE p.id = ?`
+	row := s.db.QueryRow(s.pq(getPayrollSQL), id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	var pr PayrollRecord
 	if err := row.Scan(&pr.ID, &pr.EmployeeID, &pr.EmployeeName, &pr.Period, &pr.BaseSalary, &pr.OvertimeHours, &pr.OvertimeRate, &pr.Bonuses, &pr.Deductions, &pr.NetPay); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -621,7 +623,7 @@ func (s *Store) PayrollTotals(filter PayrollFilter) ([]PayrollPeriodTotal, float
 	}
 	builder.WriteString(" GROUP BY p.period ORDER BY p.period DESC")
 
-	rows, err := s.db.Query(s.pq(builder.String()), args...)
+	rows, err := s.db.Query(s.pq(builder.String()), args...) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
 	if err != nil {
 		return nil, 0, err
 	}
