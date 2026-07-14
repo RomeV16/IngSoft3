@@ -1,3 +1,18 @@
+// store.go — CAPA DE ACCESO A DATOS (sin ORM, database/sql puro).
+//
+// Soporta DOS motores con el mismo código:
+//   - SQLite  (tests unitarios con ":memory:" y desarrollo local)
+//   - PostgreSQL (Railway: DEV y PROD comparten la misma instancia)
+//
+// Cómo funciona el soporte dual:
+//   1. NewStore() mira el prefijo del DSN: "postgres://" → driver postgres
+//   2. Las queries se escriben una sola vez con placeholders "?"
+//   3. El método pq() las convierte a "$1, $2..." solo si el motor es PostgreSQL
+//   4. Init() tiene dos schemas: AUTOINCREMENT/REAL para SQLite,
+//      SERIAL/DOUBLE PRECISION para PostgreSQL
+//
+// Los drivers se importan con "_" (import por efecto secundario): se
+// registran en database/sql pero no se usan directamente en el código.
 package main
 
 import (
@@ -7,8 +22,8 @@ import (
 	"regexp"
 	"strings"
 
-	_ "github.com/lib/pq"
-	_ "modernc.org/sqlite"
+	_ "github.com/lib/pq"        // driver PostgreSQL
+	_ "modernc.org/sqlite"       // driver SQLite (Go puro, sin CGo)
 )
 
 type Employee struct {
@@ -81,9 +96,13 @@ type PayrollPeriodTotal struct {
 	Total  float64 `json:"totalNet"`
 }
 
+// Errores "sentinela": los handlers los detectan con errors.Is() para mapear
+// a códigos HTTP (ErrNotFound → 404, ErrInvalidTransition → 422).
 var ErrNotFound = errors.New("not found")
 var ErrInvalidTransition = errors.New("invalid transition")
 
+// Store encapsula la conexión a la BD. El flag "postgres" indica qué motor
+// hay detrás y controla la conversión de placeholders en pq().
 type Store struct {
 	db       *sql.DB
 	postgres bool
@@ -95,6 +114,12 @@ const (
 	ReviewStateApproved  = "approved"
 )
 
+// NewStore abre la conexión detectando el motor por el prefijo del DSN.
+// Ejemplos:
+//   "postgres://user:pass@host:5432/db" → PostgreSQL
+//   "/data/employees.db" o ":memory:"   → SQLite
+// Nota: sql.Open es "lazy" — no conecta hasta la primera consulta, por eso
+// un DSN con host inválido no falla acá sino recién en Init().
 func NewStore(dsn string) (*Store, error) {
 	driver := "sqlite"
 	postgres := false
@@ -109,12 +134,18 @@ func NewStore(dsn string) (*Store, error) {
 	return &Store{db: db, postgres: postgres}, nil
 }
 
-// pq replaces ? placeholders with $1, $2, ... for PostgreSQL.
+// pq (placeholder query) resuelve la diferencia de sintaxis entre motores:
+// SQLite usa "?" como placeholder, PostgreSQL usa "$1, $2, ...".
+// Todas las queries del proyecto se escriben con "?" y este método las
+// convierte SOLO si el motor es PostgreSQL. Los VALORES siempre viajan como
+// parámetros separados (nunca concatenados al string) → no hay SQL injection.
+//   Entrada: "UPDATE employees SET name=? WHERE id=?"
+//   Salida:  "UPDATE employees SET name=$1 WHERE id=$2"  (si postgres)
 var rePlaceholder = regexp.MustCompile(`\?`)
 
 func (s *Store) pq(query string) string {
 	if !s.postgres {
-		return query
+		return query // SQLite: la query queda igual
 	}
 	n := 0
 	return rePlaceholder.ReplaceAllStringFunc(query, func(_ string) string {
@@ -130,6 +161,14 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Init crea las tablas si no existen (CREATE TABLE IF NOT EXISTS → se puede
+// correr en cada arranque sin romper nada). Hay dos versiones del schema
+// porque la sintaxis de autoincremento y de números difiere entre motores:
+//   SQLite:     INTEGER PRIMARY KEY AUTOINCREMENT | REAL
+//   PostgreSQL: SERIAL PRIMARY KEY                | DOUBLE PRECISION
+// Tablas: employees, performance_reviews (FK a employees, con estado),
+// payroll_records (FK a employees, con neto precalculado).
+// ON DELETE CASCADE: al borrar un empleado se borran sus reviews y nóminas.
 func (s *Store) Init() error {
 	var schema string
 	if s.postgres {
@@ -223,6 +262,9 @@ func (s *Store) ListEmployees() ([]Employee, error) {
 	return result, rows.Err()
 }
 
+// CreateEmployee inserta y recupera el id generado en una sola query gracias
+// a "RETURNING id" (soportado por PostgreSQL y por SQLite moderno — evita
+// usar LastInsertId(), que el driver de PostgreSQL no implementa).
 func (s *Store) CreateEmployee(name string) (Employee, error) {
 	var id int64
 	err := s.db.QueryRow(s.pq("INSERT INTO employees(name) VALUES(?) RETURNING id"), name).Scan(&id) // NOSONAR: consulta parametrizada; pq() solo convierte placeholders ? a $N
@@ -317,6 +359,11 @@ var (
 	}
 )
 
+// buildReviewFilter arma el WHERE dinámico de forma SEGURA: las cláusulas
+// son strings fijos del código (no vienen del usuario) y los valores van en
+// el slice args como parámetros. Devuelve por ejemplo:
+//   clauses = ["r.employee_id = ?", "r.period = ?"], args = [3, "2026-S1"]
+// que luego se une con AND. Nunca se concatena input del usuario en el SQL.
 func buildReviewFilter(filter PerformanceReviewFilter) ([]string, []any) {
 	clauses := make([]string, 0)
 	args := make([]any, 0)
@@ -394,6 +441,11 @@ func (s *Store) UpdatePerformanceReview(id int64, update PerformanceReviewUpdate
 	return s.getPerformanceReviewByID(id)
 }
 
+// TransitionPerformanceReview implementa la máquina de estados de reviews:
+//   draft → submitted → approved (solo hacia adelante, de a un paso)
+// Primero lee el estado actual, valida la transición con isValidTransition()
+// y recién entonces actualiza. Si la transición es ilegal devuelve
+// ErrInvalidTransition (el handler lo convierte en HTTP 422).
 func (s *Store) TransitionPerformanceReview(id int64, nextState string) (PerformanceReview, error) {
 	review, err := s.getPerformanceReviewByID(id)
 	if err != nil {
@@ -570,6 +622,10 @@ func (s *Store) CreatePayrollRecord(input PayrollRecordInput) (PayrollRecord, er
 	return s.getPayrollByID(id)
 }
 
+// calculateNetPay es LA regla de negocio de nómina: el neto se calcula
+// siempre en el servidor (el cliente no puede mandarlo) para que nadie
+// pueda falsear el sueldo desde el navegador.
+//   neto = básico + (horas extra × tarifa) + bonos − deducciones
 func calculateNetPay(base, overtimeHours, overtimeRate, bonuses, deductions float64) float64 {
 	return base + (overtimeHours * overtimeRate) + bonuses - deductions
 }

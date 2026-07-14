@@ -1,15 +1,26 @@
+# Dockerfile.front-runtime — imagen del FRONTEND (Next.js).
+#
+# Importante: esta imagen NO buildea el proyecto. El build (npm run build)
+# ya ocurrió en el job "frontend" del pipeline; acá solo se copia el
+# artefacto ya compilado (carpeta .next + node_modules de producción).
+# Ventaja: la imagen que se publica contiene EXACTAMENTE el código que
+# pasó los tests — no hay un segundo build que pueda diferir.
 FROM node:20-bookworm
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Copia el artefacto descomprimido (preparado por el job publish_images)
 COPY . .
 
 RUN chmod +x scripts/runtime-entrypoint.sh
 
 EXPOSE 3000
 
+# ENTRYPOINT + CMD: al arrancar el container primero corre el entrypoint
+# (inyecta NEXT_PUBLIC_API_URL en runtime-env.js) y después ejecuta
+# "npm run start" (next start). Así la MISMA imagen sirve para DEV y PROD:
+# solo cambia la variable de entorno que Railway le pasa a cada servicio.
 ENTRYPOINT ["scripts/runtime-entrypoint.sh"]
 CMD ["npm", "run", "start"]
-

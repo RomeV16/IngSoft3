@@ -1,3 +1,11 @@
+// handlers_test.go — TESTS UNITARIOS del backend (job "backend" del pipeline).
+//
+// Estrategia: cada test levanta un servidor de prueba con SQLite EN MEMORIA
+// (":memory:") — rápido, aislado y sin depender de PostgreSQL ni de la red.
+// httptest.NewRecorder captura la respuesta sin abrir un puerto real.
+// Se prueban los bloques de código de la capa HTTP: códigos de estado,
+// validaciones (422), not found (404), errores de BD (500) y CORS.
+// La cobertura de estos tests alimenta el Quality Gate de SonarCloud.
 package main
 
 import (

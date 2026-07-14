@@ -1,3 +1,15 @@
+// main.go — PUNTO DE ENTRADA del backend.
+//
+// Arranque del servidor:
+//  1. resolveDSN() decide a qué base conectarse según variables de entorno
+//  2. NewStore() abre la conexión (detecta SQLite o PostgreSQL por el DSN)
+//  3. Init() crea las tablas si no existen (schema idempotente)
+//  4. Se registran las rutas y se levanta el servidor HTTP con CORS abierto
+//
+// Variables de entorno relevantes (configuradas en Railway):
+//   DATABASE_URL → conexión PostgreSQL (la usan DEV y PROD, misma BD)
+//   DB_DSN       → alternativa (ruta a archivo SQLite, ej: /data/employees.db)
+//   PORT         → puerto HTTP (Railway lo inyecta; default 8080)
 package main
 
 import (
@@ -6,7 +18,12 @@ import (
 	"os"
 )
 
-// resolveDSN determina la cadena de conexión: DATABASE_URL > DB_DSN > SQLite local.
+// resolveDSN determina la cadena de conexión con este orden de prioridad:
+//  1. DATABASE_URL (PostgreSQL en Railway — producción y dev)
+//  2. DB_DSN       (ruta a SQLite, ej. volumen /data en Docker)
+//  3. ./employees.db (SQLite local — desarrollo en la máquina propia)
+// Está extraída de main() para poder testearla unitariamente
+// (TestResolveDSN en store_pg_test.go — main() no se puede testear directo).
 func resolveDSN() string {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -43,7 +60,11 @@ func main() {
 	}
 }
 
-// withCORS disables CORS entirely by returning permissive headers for every request.
+// withCORS es un middleware: envuelve al router y agrega los headers CORS a
+// toda respuesta. Es necesario porque el frontend (frontend-dev...railway.app)
+// y el backend (backend-dev...railway.app) viven en DOMINIOS DISTINTOS — sin
+// estos headers el navegador bloquearía los fetch del frontend.
+// También responde los preflight OPTIONS con 204 sin llegar a los handlers.
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const defaultMethods = "GET, POST, PUT, DELETE, OPTIONS, PATCH"

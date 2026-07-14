@@ -1,3 +1,18 @@
+// payroll.cy.ts — TEST DE INTEGRACIÓN (E2E) del flujo de nómina.
+//
+// Diferencia clave con un test unitario: acá NO hay mocks. Cypress abre un
+// navegador real contra el frontend DEPLOYADO en Railway DEV, que le pega
+// al backend real, que escribe en la PostgreSQL real. Se prueba la
+// FUNCIONALIDAD COMPLETA de punta a punta.
+//
+// API_URL la inyecta el pipeline (--env API_URL=...) y se usa solo para
+// preparar datos de prueba vía cy.request (crear el empleado antes de
+// cargar su nómina). La navegación (cy.visit) va contra FRONTEND_URL,
+// definida en cypress.config.
+//
+// Este spec es el que usamos para el demo del caso 3: si alguien cambia el
+// aria-label "payroll-form" en PayrollForm.tsx, Jest no lo nota (no testea
+// el DOM deployado) pero este cy.get() no encuentra el formulario y falla.
 const API_URL = Cypress.env('API_URL') || 'http://localhost:8080';
 
 describe('Payroll flow', () => {

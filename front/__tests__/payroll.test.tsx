@@ -1,3 +1,13 @@
+// payroll.test.tsx — TEST UNITARIO del componente PayrollForm (Jest + RTL).
+//
+// Diferencia clave con el E2E: acá NO hay backend ni navegador real.
+// - El componente se renderiza en jsdom (un DOM simulado en Node)
+// - onSubmit es un mock de Jest (jest.fn()) — no viaja ningún request HTTP
+// - Se prueba el BLOQUE de código aislado: validaciones del formulario,
+//   cálculo del neto estimado en pantalla, y que onSubmit reciba los
+//   valores correctos.
+// Corre en el job "frontend" del pipeline (npm run test:ci), ANTES de
+// deployar nada — es la primera barrera de calidad.
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../test/test-utils';
 import PayrollForm from '../src/components/PayrollForm';

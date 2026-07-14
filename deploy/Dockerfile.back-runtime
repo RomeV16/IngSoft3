@@ -1,12 +1,20 @@
+# Dockerfile.back-runtime — imagen del BACKEND (Go).
+#
+# El binario "server" ya viene compilado del job "backend" del pipeline
+# (go build produce un ejecutable estático). La imagen base es Debian slim:
+# solo necesita ca-certificates para poder hacer conexiones TLS salientes.
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
+# Binario Go compilado en el pipeline (mismo artefacto que pasó los tests)
 COPY server ./server
 
-# Create a directory for the database and ensure it has the correct permissions
+# /data: punto de montaje del volumen persistente de Railway (para SQLite).
+# Si DATABASE_URL apunta a PostgreSQL (caso actual de DEV y PROD), este
+# directorio no se usa — DB_DSN queda solo como fallback.
 RUN mkdir -p /data
 
 ENV PORT=8080
@@ -14,4 +22,3 @@ ENV DB_DSN=/data/employees.db
 EXPOSE 8080
 
 CMD ["./server"]
-

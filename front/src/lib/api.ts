@@ -1,3 +1,8 @@
+// api.ts — CLIENTE HTTP del frontend.
+// Único punto del frontend que habla con el backend: los componentes React
+// importan estas funciones (getEmployees, createPayroll, etc.) y nunca hacen
+// fetch directo. Los tipos de acá espejan los structs JSON del backend Go.
+
 export type Employee = { id: number; name: string };
 
 export type PerformanceReview = {
@@ -51,6 +56,17 @@ export type PayrollListResponse = {
   };
 };
 
+// resolveApiBase decide a qué backend pegarle. Este es el truco clave del
+// deploy: en Next.js las variables NEXT_PUBLIC_* se "hornean" EN BUILD TIME,
+// pero nosotros construimos UNA sola imagen Docker y la usamos en DEV y PROD
+// con backends distintos. La solución es inyección en RUNTIME:
+//   1. Al arrancar el container, runtime-entrypoint.sh lee NEXT_PUBLIC_API_URL
+//      del entorno (configurada en Railway) y escribe public/runtime-env.js
+//   2. Ese script define window.__ENV__ en el navegador
+//   3. Acá leemos primero window.__ENV__ (runtime) y solo si no existe caemos
+//      a process.env (build time) o a localhost:8080 (desarrollo local)
+// El chequeo de "__NEXT_PUBLIC_API_URL__" descarta el placeholder sin
+// reemplazar (cuando el entrypoint no corrió).
 function resolveApiBase(): string {
   if (typeof window !== "undefined") {
     const runtime = (window as any).__ENV__?.NEXT_PUBLIC_API_URL;
@@ -73,6 +89,9 @@ function apiUrl(path: string): string {
   return `${base}${path}`;
 }
 
+// handleJson centraliza el manejo de respuestas: si el status no es 2xx,
+// lanza un Error con el mensaje del campo {"error": ...} que manda el
+// backend — los componentes lo capturan y lo muestran en un <Alert>.
 async function handleJson<T>(res: Response): Promise<T> {
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
