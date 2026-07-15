@@ -10,6 +10,8 @@
 //   DATABASE_URL → conexión PostgreSQL (la usan DEV y PROD, misma BD)
 //   DB_DSN       → alternativa (ruta a archivo SQLite, ej: /data/employees.db)
 //   PORT         → puerto HTTP (Railway lo inyecta; default 8080)
+//
+// Pipeline final: build, tests, análisis estático y despliegue verificados.
 package main
 
 import (
